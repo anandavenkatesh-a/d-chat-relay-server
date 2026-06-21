@@ -15,6 +15,7 @@
  */
 
 require('dotenv').config();
+const http = require('http');
 const { WebSocketServer } = require('ws');
 const connections = require('./connections');
 const ackQueue = require('./ackQueue');
@@ -27,12 +28,33 @@ const onPullAcks  = require('./handlers/onPullAcks');
 const PORT = parseInt(process.env.PORT) || 8080;
 const CLEANUP_INTERVAL_MS = (parseInt(process.env.CLEANUP_INTERVAL_MINUTES) || 60) * 60 * 1000;
 
-// ── WebSocket Server ──────────────────────────────────────────────────────────
+// ── HTTP Server (health endpoint only) ───────────────────────────────────────
+// Shares the same port as the WebSocket server.
+// Railway (and any load balancer) hits GET /health to verify the process is up.
 
-const wss = new WebSocketServer({ port: PORT });
+const httpServer = http.createServer((req, res) => {
+  if (req.method === 'GET' && req.url === '/health') {
+    const body = JSON.stringify({
+      status: 'ok',
+      connections: wss ? wss.clients.size : 0,
+      ackQueueSize: ackQueue.queueSize(),
+      uptime: Math.floor(process.uptime()),
+    });
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(body);
+  } else {
+    res.writeHead(404);
+    res.end();
+  }
+});
 
-wss.on('listening', () => {
-  console.log(`\n🚀 SecureChat Relay running on ws://localhost:${PORT}`);
+// ── WebSocket Server (attached to the same HTTP server) ──────────────────────
+
+const wss = new WebSocketServer({ server: httpServer });
+
+httpServer.listen(PORT, () => {
+  console.log(`\n🚀 SecureChat Relay running on port ${PORT}`);
+  console.log(`   Health check  : http://localhost:${PORT}/health`);
   console.log(`   ACK TTL       : ${process.env.ACK_TTL_HOURS || 24} hours`);
   console.log(`   Cleanup every : ${process.env.CLEANUP_INTERVAL_MINUTES || 60} minutes\n`);
 });
@@ -111,8 +133,10 @@ setInterval(() => {
 function shutdown(signal) {
   console.log(`\n[${signal}] Shutting down relay...`);
   wss.close(() => {
-    console.log('[BYE] All connections closed.');
-    process.exit(0);
+    httpServer.close(() => {
+      console.log('[BYE] All connections closed.');
+      process.exit(0);
+    });
   });
 }
 
