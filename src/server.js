@@ -1,0 +1,120 @@
+/**
+ * server.js
+ * SecureChat Relay Server
+ *
+ * Responsibilities:
+ *  - Accept WebSocket connections from devices
+ *  - Route encrypted message blobs (never reads payload)
+ *  - Queue ACKs (stored/seen) for offline senders, flush on reconnect
+ *  - Purge expired ACKs every CLEANUP_INTERVAL_MINUTES
+ *
+ * What this server will NEVER do:
+ *  - Store message content
+ *  - Read or decrypt any payload
+ *  - Know usernames or identities (only opaque device_ids)
+ */
+
+require('dotenv').config();
+const { WebSocketServer } = require('ws');
+const connections = require('./connections');
+const ackQueue = require('./ackQueue');
+
+const onConnect   = require('./handlers/onConnect');
+const onSend      = require('./handlers/onSend');
+const onAck       = require('./handlers/onAck');
+const onPullAcks  = require('./handlers/onPullAcks');
+
+const PORT = parseInt(process.env.PORT) || 8080;
+const CLEANUP_INTERVAL_MS = (parseInt(process.env.CLEANUP_INTERVAL_MINUTES) || 60) * 60 * 1000;
+
+// ── WebSocket Server ──────────────────────────────────────────────────────────
+
+const wss = new WebSocketServer({ port: PORT });
+
+wss.on('listening', () => {
+  console.log(`\n🚀 SecureChat Relay running on ws://localhost:${PORT}`);
+  console.log(`   ACK TTL       : ${process.env.ACK_TTL_HOURS || 24} hours`);
+  console.log(`   Cleanup every : ${process.env.CLEANUP_INTERVAL_MINUTES || 60} minutes\n`);
+});
+
+wss.on('connection', (ws, req) => {
+  const ip = req.socket.remoteAddress;
+  console.log(`[WS] New connection from ${ip}`);
+
+  ws.on('message', (raw) => {
+    let data;
+
+    // Parse JSON — drop malformed messages silently
+    try {
+      data = JSON.parse(raw.toString());
+    } catch {
+      ws.send(JSON.stringify({ type: 'error', message: 'Invalid JSON' }));
+      return;
+    }
+
+    if (!data.type) {
+      ws.send(JSON.stringify({ type: 'error', message: 'Missing event type' }));
+      return;
+    }
+
+    // Route to the correct handler
+    switch (data.type) {
+      case 'connect':
+        onConnect(ws, data);
+        break;
+
+      case 'send':
+        onSend(ws, data);
+        break;
+
+      case 'ack_stored':
+      case 'ack_seen':
+        onAck(ws, data);
+        break;
+
+      case 'pull_acks':
+        onPullAcks(ws, data);
+        break;
+
+      default:
+        ws.send(JSON.stringify({ type: 'error', message: `Unknown event type: ${data.type}` }));
+    }
+  });
+
+  ws.on('close', () => {
+    if (ws.deviceId) {
+      connections.unregister(ws.deviceId);
+    }
+  });
+
+  ws.on('error', (err) => {
+    console.error(`[WS] Socket error for ${ws.deviceId || 'unregistered'}:`, err.message);
+    if (ws.deviceId) {
+      connections.unregister(ws.deviceId);
+    }
+  });
+});
+
+wss.on('error', (err) => {
+  console.error('[WS] Server error:', err.message);
+});
+
+// ── ACK Cleanup Job ───────────────────────────────────────────────────────────
+
+setInterval(() => {
+  ackQueue.purgeExpired();
+  console.log(`[CLEANUP] ACK queue size: ${ackQueue.queueSize()} | Active connections: ${wss.clients.size}`);
+}, CLEANUP_INTERVAL_MS);
+
+// ── Graceful Shutdown ─────────────────────────────────────────────────────────
+
+function shutdown(signal) {
+  console.log(`\n[${signal}] Shutting down relay...`);
+  wss.close(() => {
+    console.log('[BYE] All connections closed.');
+    process.exit(0);
+  });
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT',  () => shutdown('SIGINT'));
