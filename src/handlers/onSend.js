@@ -7,14 +7,15 @@
  *   { type: "send", to: "device_id", msg_id: "uuid", payload: "base64ciphertext" }
  *
  * Responses to sender:
- *   { type: "ack_sent",  msg_id }  ← relay received it
- *   { type: "dropped",   msg_id }  ← recipient offline, message dropped
+ *   { type: "ack_sent",   msg_id }  ← relay received it
+ *   { type: "ack_queued", msg_id }  ← recipient offline, message queued (up to 24h)
  *
- * Event forwarded to recipient:
+ * Event forwarded to recipient (live or on reconnect):
  *   { type: "message", from: "device_id", msg_id, payload }
  */
 
 const connections = require('../connections');
+const messageQueue = require('../messageQueue');
 
 function onSend(ws, data) {
   const { to, msg_id, payload } = data;
@@ -33,7 +34,7 @@ function onSend(ws, data) {
   // ACK sender immediately — relay has received the message
   ws.send(JSON.stringify({ type: 'ack_sent', msg_id }));
 
-  // Forward to recipient
+  // Try live delivery first
   const delivered = connections.send(to, {
     type: 'message',
     from,
@@ -42,11 +43,12 @@ function onSend(ws, data) {
   });
 
   if (!delivered) {
-    // Recipient is offline — drop message, notify sender
-    ws.send(JSON.stringify({ type: 'dropped', msg_id }));
-    console.log(`[~] Message ${msg_id} dropped — ${to} is offline`);
+    // Recipient is offline — queue the ciphertext blob (24h TTL, still opaque)
+    messageQueue.push(to, msg_id, from, payload);
+    ws.send(JSON.stringify({ type: 'ack_queued', msg_id }));
+    console.log(`[~] Message ${msg_id} queued — ${to} is offline`);
   } else {
-    console.log(`[→] Message ${msg_id} routed: ${from} → ${to}`);
+    console.log(`[→] Message ${msg_id} routed live: ${from} → ${to}`);
   }
 }
 

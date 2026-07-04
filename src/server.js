@@ -19,6 +19,7 @@ const http = require('http');
 const { WebSocketServer } = require('ws');
 const connections = require('./connections');
 const ackQueue = require('./ackQueue');
+const messageQueue = require('./messageQueue');
 
 const onConnect   = require('./handlers/onConnect');
 const onSend      = require('./handlers/onSend');
@@ -38,6 +39,7 @@ const httpServer = http.createServer((req, res) => {
       status: 'ok',
       connections: wss ? wss.clients.size : 0,
       ackQueueSize: ackQueue.queueSize(),
+      messageQueueSize: messageQueue.queueSize(),
       uptime: Math.floor(process.uptime()),
     });
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -56,12 +58,15 @@ httpServer.listen(PORT, () => {
   console.log(`\n🚀 SecureChat Relay running on port ${PORT}`);
   console.log(`   Health check  : http://localhost:${PORT}/health`);
   console.log(`   ACK TTL       : ${process.env.ACK_TTL_HOURS || 24} hours`);
+  console.log(`   Message TTL   : ${process.env.MESSAGE_TTL_HOURS || 24} hours`);
+  console.log(`   Max queued/dev: ${messageQueue.MAX_QUEUED_PER_DEVICE}`);
   console.log(`   Cleanup every : ${process.env.CLEANUP_INTERVAL_MINUTES || 60} minutes\n`);
 });
 
 wss.on('connection', (ws, req) => {
-  const ip = req.socket.remoteAddress;
-  console.log(`[WS] New connection from ${ip}`);
+  // Deliberately NOT logging req.socket.remoteAddress or any IP —
+  // the relay must never persist or print information that could
+  // link a device_id to a real-world network identity, even in logs.
 
   ws.on('message', (raw) => {
     let data;
@@ -125,7 +130,8 @@ wss.on('error', (err) => {
 
 setInterval(() => {
   ackQueue.purgeExpired();
-  console.log(`[CLEANUP] ACK queue size: ${ackQueue.queueSize()} | Active connections: ${wss.clients.size}`);
+  messageQueue.purgeExpired();
+  console.log(`[CLEANUP] ACK queue: ${ackQueue.queueSize()} | Message queue: ${messageQueue.queueSize()} | Active connections: ${wss.clients.size}`);
 }, CLEANUP_INTERVAL_MS);
 
 // ── Graceful Shutdown ─────────────────────────────────────────────────────────
