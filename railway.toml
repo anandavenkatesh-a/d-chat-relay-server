@@ -2,8 +2,19 @@
 builder = "dockerfile"
 
 [deploy]
-startCommand = "node src/server.js"
+# NOTE: no startCommand here anymore, deliberately. Railway's
+# startCommand overrides the Dockerfile's ENTRYPOINT if both are set —
+# it was previously "node src/server.js", which silently bypassed
+# docker-entrypoint.sh entirely (skipping Tor, the .onion hidden
+# service, and the volume permission setup). Removing it lets Railway
+# fall back to respecting ENTRYPOINT ["/docker-entrypoint.sh"] from
+# the Dockerfile, which starts Tor AND the relay together correctly.
 healthcheckPath = "/health"
-healthcheckTimeout = 10
+# Increased from 10s — docker-entrypoint.sh now starts Tor first and
+# waits for its hidden service key/hostname before starting Node
+# (previously Node started instantly with no entrypoint at all).
+# This is usually only a few seconds, but give real headroom rather
+# than risk a flaky health check failure on a slower cold start.
+healthcheckTimeout = 60
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 3

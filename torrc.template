@@ -1,0 +1,43 @@
+# torrc.template
+# Tor daemon configuration for D-Chat's relay hidden service.
+#
+# This is a TEMPLATE, not the final torrc — the actual mount path for
+# persistent storage is a deployment-time choice (set in the Railway
+# dashboard, or a local path when testing), so it can't be hardcoded
+# here. docker-entrypoint.sh substitutes ${VOLUME_MOUNT_PATH} for the
+# real path at container startup, writing the result to
+# /etc/tor/torrc before Tor is launched.
+#
+# The relay itself (src/server.js) is completely unaware any of this
+# exists — it just listens on 127.0.0.1:8080 as always.
+
+# ── Hidden Service Definition ─────────────────────────────────────────────────
+# Lives INSIDE the persistent volume so the private key (and therefore
+# the .onion address) survives redeploys and restarts automatically —
+# no manual backup step needed for normal day-to-day deploys anymore.
+# (Still worth a periodic out-of-band backup as disaster-recovery
+# insurance — see TOR_ONION_SETUP.md.)
+HiddenServiceDir ${VOLUME_MOUNT_PATH}/tor/d-chat-relay/
+HiddenServicePort 8080 127.0.0.1:8080
+
+# ── DoS Defense Layer 1: Introduction-point rate limiting (Prop 305) ─────────
+HiddenServiceEnableIntroDoSDefense 1
+HiddenServiceEnableIntroDoSRatePerSec 25
+HiddenServiceEnableIntroDoSBurstPerSec 200
+
+# ── DoS Defense Layer 2: Proof-of-Work for rendezvous requests (Prop 327) ────
+# Dormant under normal load — legitimate clients notice nothing.
+# Escalates automatically only when the service is actually under
+# stress. No CAPTCHA, no visible puzzle — this runs inside the Tor
+# protocol itself, below the app entirely.
+HiddenServicePoWDefensesEnabled 1
+HiddenServicePoWQueueRate 50
+HiddenServicePoWQueueBurst 200
+
+# ── Logging ────────────────────────────────────────────────────────────────────
+Log notice stdout
+
+# ── SOCKS port ─────────────────────────────────────────────────────────────────
+# This Tor instance only hosts the hidden service — it isn't acting as
+# a client proxy for anything else, so disable the SOCKS listener.
+SOCKSPort 0
