@@ -61,8 +61,8 @@ function onConnect(ws, data) {
   const pending = messageQueue.flush(device_id);
   if (pending.length > 0) {
     console.log(`[↓] Flushing ${pending.length} queued message(s) to ${device_id}`);
-    for (const { msgId, from, ciphertext } of pending) {
-      send(ws, { type: 'message', from, msg_id: msgId, payload: ciphertext });
+    for (const { msgId, from, ciphertext, sentAt } of pending) {
+      send(ws, { type: 'message', from, msg_id: msgId, payload: ciphertext, sent_at: sentAt });
     }
   }
 }

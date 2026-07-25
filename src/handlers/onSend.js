@@ -40,12 +40,18 @@ function onSend(ws, data) {
   // ACK sender immediately — relay has received the message
   ws.send(JSON.stringify({ type: 'ack_sent', msg_id }));
 
+  // Relay's own receive time — used as the message timestamp on the
+  // recipient's side (see messageQueue.js's push() comment for why),
+  // consistently for both live and queued delivery.
+  const sentAt = Date.now();
+
   // Try live delivery first
   const delivered = connections.send(to, {
     type: 'message',
     from,
     msg_id,
     payload, // opaque ciphertext, relay never reads this
+    sent_at: sentAt,
   });
 
   if (!delivered) {

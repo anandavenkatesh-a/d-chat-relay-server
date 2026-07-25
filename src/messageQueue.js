@@ -39,11 +39,24 @@ function push(toDeviceId, msgId, fromDeviceId, ciphertext) {
     bucket.shift(); // drop oldest
   }
 
+  const now = Date.now();
   bucket.push({
     msgId,
     from: fromDeviceId,
     ciphertext,
-    expiresAt: Date.now() + MESSAGE_TTL_MS,
+    // The relay's OWN receive time, not anything the sender claims —
+    // this is what gets shown to the recipient as the message
+    // timestamp (see onConnect.js / onSend.js), instead of whatever
+    // moment the recipient's device happens to download and process
+    // it. For a message queued while the recipient was offline, that
+    // gap could be minutes to the full 24h TTL — using the relay's
+    // receive time (very close to the sender's actual send moment,
+    // modulo network latency) is a far better, and cross-device-
+    // clock-skew-free, proxy for "when was this actually sent" than
+    // either the recipient's download time or trusting the sender's
+    // own device clock.
+    sentAt: now,
+    expiresAt: now + MESSAGE_TTL_MS,
   });
 }
 
@@ -56,7 +69,7 @@ function flush(toDeviceId) {
   queue.delete(toDeviceId);
   return messages
     .filter((m) => m.expiresAt > Date.now()) // drop any that expired mid-flight
-    .map(({ msgId, from, ciphertext }) => ({ msgId, from, ciphertext }));
+    .map(({ msgId, from, ciphertext, sentAt }) => ({ msgId, from, ciphertext, sentAt }));
 }
 
 /**
