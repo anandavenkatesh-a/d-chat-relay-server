@@ -11,6 +11,7 @@
   "license": "ISC",
   "dependencies": {
     "dotenv": "^17.4.2",
+    "tweetnacl": "^1.0.3",
     "uuid": "^14.0.1",
     "ws": "^8.21.0"
   },

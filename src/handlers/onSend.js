@@ -16,6 +16,7 @@
 
 const connections = require('../connections');
 const messageQueue = require('../messageQueue');
+const rateLimiter = require('../rateLimiter');
 
 function onSend(ws, data) {
   const { to, msg_id, payload } = data;
@@ -28,6 +29,11 @@ function onSend(ws, data) {
   }
   if (!to || !msg_id || !payload) {
     ws.send(JSON.stringify({ type: 'error', message: 'Missing to / msg_id / payload' }));
+    return;
+  }
+
+  if (!rateLimiter.allow(from)) {
+    ws.send(JSON.stringify({ type: 'rate_limited', retry_after: 1 }));
     return;
   }
 
