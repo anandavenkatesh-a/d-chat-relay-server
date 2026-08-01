@@ -1,8 +1,7 @@
 /**
  * onRegister.js
- * Handles the registration flow (Functionality 1 + the ownership
- * proof folded in from Functionality 2, to prevent device_id
- * squatting).
+ * Handles the registration flow: identity proof (signature over a
+ * server nonce) + the single streamed audio-discrimination puzzle.
  */
 
 const nonceStore = require('../nonceStore');
@@ -50,19 +49,37 @@ function onRegisterRequest(ws, data) {
     encryptionPublicKey: encryption_public_key,
   };
 
-  console.log(`[Register] Starting puzzle gauntlet for new device_id: ${device_id}`);
+  console.log(`[Register] Starting continuous noise-masked audio puzzle for new device_id: ${device_id}`);
 
-  puzzles.startSession(ws);
-  puzzles.beginRound(ws, (round, total) => {
-    send(ws, { type: 'puzzle_reveal', round, total });
+  puzzles.startSession(ws, {
+    onSessionStart: (total) => {
+      send(ws, {
+        type: 'puzzle_session_start',
+        total_chunks: total,
+        chunk_duration_ms: puzzles.CHUNK_DURATION_MS,
+        session_duration_ms: puzzles.SESSION_DURATION_MS,
+      });
+    },
+    onChunk: (chunk) => {
+      send(ws, {
+        type: 'puzzle_audio_chunk',
+        index: chunk.index,
+        total: chunk.total,
+        audio_base64: chunk.audioBase64,
+        is_final: chunk.isFinal,
+      });
+    },
+    onAnswerWindowOpen: (windowMs) => {
+      send(ws, { type: 'puzzle_answer_window', deadline_ms: windowMs });
+    },
   });
 }
 
-function onPuzzleResponse(ws) {
+function onPuzzleResponse(ws, data) {
   const context = ws._pendingRegistration;
   if (!context) return;
 
-  const result = puzzles.submitResponse(ws);
+  const result = puzzles.submitResponse(ws, data.count);
 
   if (!result.pass) {
     delete ws._pendingRegistration;
@@ -70,20 +87,13 @@ function onPuzzleResponse(ws) {
     return;
   }
 
-  if (result.done) {
-    deviceRegistry.register(context.deviceId, {
-      signingPublicKey: context.signingPublicKey,
-      encryptionPublicKey: context.encryptionPublicKey,
-    });
-    console.log(`[Register] Success — device_id registered: ${context.deviceId}`);
-    delete ws._pendingRegistration;
-    send(ws, { type: 'register_ack', success: true });
-    return;
-  }
-
-  puzzles.beginRound(ws, (round, total) => {
-    send(ws, { type: 'puzzle_reveal', round, total });
+  deviceRegistry.register(context.deviceId, {
+    signingPublicKey: context.signingPublicKey,
+    encryptionPublicKey: context.encryptionPublicKey,
   });
+  console.log(`[Register] Success — device_id registered: ${context.deviceId}`);
+  delete ws._pendingRegistration;
+  send(ws, { type: 'register_ack', success: true });
 }
 
 function onDisconnect(ws) {
